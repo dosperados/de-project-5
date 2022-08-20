@@ -3,6 +3,7 @@ import psycopg2 as pg
 import requests
 import pendulum
 import datetime as dt
+import logging
 
 from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
@@ -111,8 +112,10 @@ def uni_migration(
         ).json()
         
         if len(response) == 0:
+            logging.info('Empty data from API')
             data_exists = False
         else:
+            logging.info(f'Data from API with parameters offset={start_i}&limit={step_i}' + extra_api)
             with db_conn() as conn:
                 cursor = conn.cursor()
                 
