@@ -74,6 +74,77 @@ CONFIG = {
             ;
             """
     },
+    'l_user_group_activity': {
+        'table': 'VVJAKELYANDEXRU__DWH.l_user_group_activity',
+        'insert_query': """
+            INSERT INTO VVJAKELYANDEXRU__DWH.l_user_group_activity(hk_l_user_group_activity, hk_user_id,hk_group_id,load_dt,load_src)
+            select distinct
+            hash(hu.user_id, hg.group_id)  as hk_l_user_group_activity,
+            hu.hk_user_id,
+            hg.hk_group_id,
+            now() as load_dt,
+	        's3' as load_src
+        from VVJAKELYANDEXRU__STAGING.group_log as gl
+        left join VVJAKELYANDEXRU__DWH.h_users as hu on gl.user_id = hu.user_id 
+        left join VVJAKELYANDEXRU__DWH.h_groups as hg on gl.group_id = hg.group_id
+        where hash(hu.user_id, hg.group_id) not in (select hk_l_user_group_activity from VVJAKELYANDEXRU__DWH.l_user_group_activity)
+        ;
+        """
+    },
+    's_auth_history': {
+        'table': 'VVJAKELYANDEXRU__DWH.s_auth_history',
+        'insert_query': """
+        INSERT INTO VVJAKELYANDEXRU__DWH.s_auth_history(hk_l_user_group_activity, user_id_from,event,event_dt,load_dt,load_src)
+        select 
+        luga.hk_l_user_group_activity,
+        gl.user_id_from,
+        gl.event,
+        gl."datetime" as event_dt,
+        now() as load_dt,
+        's3' as load_src
+        from VVJAKELYANDEXRU__STAGING.group_log as gl
+        left join VVJAKELYANDEXRU__DWH.h_groups as hg on gl.group_id = hg.group_id
+        left join VVJAKELYANDEXRU__DWH.h_users as hu on gl.user_id = hu.user_id
+        left join VVJAKELYANDEXRU__DWH.l_user_group_activity as luga on hg.hk_group_id = luga.hk_group_id and hu.hk_user_id = luga.hk_user_id
+        where luga.hk_l_user_group_activity not in (select distinct hk_l_user_group_activity from VVJAKELYANDEXRU__DWH.s_auth_history)
+        ;
+        """
+    },
+    'dm_user_conversion': {
+        'table': 'VVJAKELYANDEXRU__DWH.dm_user_conversion',
+        'insert_query': """
+        truncate table VVJAKELYANDEXRU__DWH.dm_user_conversion;
+
+        INSERT INTO VVJAKELYANDEXRU__DWH.dm_user_conversion (hk_group_id, cnt_added_users, cnt_users_in_group_with_messages, group_conversion, load_dt)
+        with last_10_groups as (
+            select hg.hk_group_id, hg.group_id 
+                from VVJAKELYANDEXRU__DWH.h_groups hg 
+                order by hg.registration_dt asc
+                limit 10
+        ), users_added_to_group as (
+            select luga2.hk_group_id, count(distinct luga2.hk_user_id) as count from VVJAKELYANDEXRU__DWH.l_user_group_activity luga2 
+            inner join VVJAKELYANDEXRU__DWH.s_auth_history sah2 on luga2.hk_l_user_group_activity = sah2.hk_l_user_group_activity 
+            where luga2.hk_group_id in (select hk_group_id from last_10_groups)
+                and sah2.event = 'add'	
+            group by luga2.hk_group_id
+        ), user_group_messages as (
+            select hg.hk_group_id,
+                    max(added_u.count) as cnt_added_users,
+                    count(distinct lum.hk_user_id) as cnt_users_in_group_with_messages
+            FROM last_10_groups hg 
+            inner join users_added_to_group as added_u on hg.hk_group_id = added_u.hk_group_id
+            inner join VVJAKELYANDEXRU__DWH.l_groups_dialogs lgd on hg.hk_group_id = lgd.hk_group_id
+            inner join VVJAKELYANDEXRU__DWH.l_user_message lum on lum.hk_message_id = lgd.hk_message_id
+            left join VVJAKELYANDEXRU__DWH.l_user_group_activity luga on hg.hk_group_id = luga.hk_group_id and lum.hk_user_id = luga.hk_user_id
+            left join VVJAKELYANDEXRU__DWH.s_auth_history sah on luga.hk_l_user_group_activity = sah.hk_l_user_group_activity
+            group by hg.hk_group_id
+        ), main as (
+            select *, (cnt_users_in_group_with_messages / cnt_added_users) as group_conversion from user_group_messages
+        )
+        select hk_group_id, cnt_added_users, cnt_users_in_group_with_messages, group_conversion, now() as load_dt  from main order by group_conversion desc
+        ;
+        """
+    },
 }
 
 CONN_INFO = {'host': '51.250.75.20',
@@ -81,7 +152,6 @@ CONN_INFO = {'host': '51.250.75.20',
              'user': 'VVJAKELYANDEXRU',
              'password': 'mRgWsjRg8XdppiH',
              'database': 'dwh'}
-
 
 def create_tables(conn_info: dict) -> None:
     query = """
@@ -152,7 +222,6 @@ def create_tables(conn_info: dict) -> None:
     finally:
         conn.close()
     
-
 def migr_to_stg(conn_info: dict, query: str) -> None:
     conn = vertica_python.connect(**conn_info)
     try:
@@ -161,7 +230,6 @@ def migr_to_stg(conn_info: dict, query: str) -> None:
         conn.commit()
     finally:
         conn.close()
-
 
 args = {
     "owner": "dosperados",
@@ -212,6 +280,24 @@ with DAG(
         python_callable=migr_to_stg,
         op_kwargs={'conn_info': CONN_INFO, 'query': CONFIG['dialogs']['insert_query']}
     )
+
+    loading_l_user_group_activity_task = PythonOperator(
+        task_id='loading_l_user_group_activity',
+        python_callable=migr_to_stg,
+        op_kwargs={'conn_info': CONN_INFO, 'query': CONFIG['l_user_group_activity']['insert_query']}
+    )
+
+    loading_s_auth_history_task = PythonOperator(
+        task_id='loading_s_auth_history',
+        python_callable=migr_to_stg,
+        op_kwargs={'conn_info': CONN_INFO, 'query': CONFIG['s_auth_history']['insert_query']}
+    )
+
+    loading_dm_user_conversion_task = PythonOperator(
+        task_id='loading_dm_user_conversion',
+        python_callable=migr_to_stg,
+        op_kwargs={'conn_info': CONN_INFO, 'query': CONFIG['dm_user_conversion']['insert_query']}
+    )
    
     finish_task = DummyOperator(task_id='end')
     
@@ -221,5 +307,8 @@ with DAG(
     >> loading_groups_task
     >> loading_group_log_task
     >> loading_dialogs_task
+    >> loading_l_user_group_activity_task
+    >> loading_s_auth_history_task
+    >> loading_dm_user_conversion_task
     >> finish_task
     )
