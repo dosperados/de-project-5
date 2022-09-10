@@ -72,6 +72,6 @@ group_conversion numeric(18,9) not null,
 load_dt datetime not null default now()
 )
 order by group_conversion
-SEGMENTED BY hash(hk_group_id) all nodes
+SEGMENTED BY hash(load_dt) all nodes
 PARTITION BY load_dt::date
 GROUP BY calendar_hierarchy_day(load_dt::date, 3, 2);
