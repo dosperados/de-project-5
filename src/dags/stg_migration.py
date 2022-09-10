@@ -250,9 +250,10 @@ with DAG(
         tags=['Sprint6', 'de-project-5', 'stg'],
         is_paused_upon_creation=True,
 ) as dag:
-    # start_task = DummyOperator(task_id='start')
-    start_task = PythonOperator(
-        task_id='start',
+    start_task = DummyOperator(task_id='start')
+
+    create_tables_task = PythonOperator(
+        task_id='create_tables',
         python_callable=create_tables,
         op_kwargs={'conn_info': CONN_INFO}
     )
@@ -303,6 +304,7 @@ with DAG(
     
     (
     start_task
+    >> create_tables_task
     >> loading_users_task
     >> loading_groups_task
     >> loading_group_log_task
