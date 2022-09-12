@@ -1,6 +1,8 @@
 import boto3
 import pendulum
 import datetime as dt
+import logging
+import pandas as pd
 import os #для создания папки
 
 from airflow import DAG
@@ -22,6 +24,8 @@ def create_folder():
     else:
         print ("Successfully created the directory %s " % path)
 
+logger = logging.getLogger(__name__)
+
 def get_file_from_s3(file_name: str):
     AWS_ACCESS_KEY_ID = "YCAJEWXOyY8Bmyk2eJL-hlt2K"
     AWS_SECRET_ACCESS_KEY = "YCPs52ajb2jNXxOUsL4-pFDL1HnV2BCPd928_ZoA"
@@ -42,12 +46,9 @@ def get_file_from_s3(file_name: str):
         Key=file_name,
         Filename=FILENAME
         )
+    logging.info(s3_client. head_object (Bucket='sprint6', Key=file_name),)
+    logging.info(f'\n Header in {FILENAME}: \n{pd.read_csv(FILENAME, nrows=10)}')
 
-# эту команду надо будет поправить, чтобы она выводила
-# первые десять строк каждого файла
-bash_command_tmpl = """
-echo {{ params.files }}
-"""
 
 args = {
     "owner": "dosperados",
@@ -60,7 +61,7 @@ args = {
 bucket_files = ['group.csv', 'users.csv', 'dialogs.csv', 'group_log.csv']
 
 with DAG(
-        'stg_fetch_files_from_s3',
+        'de-project-5_stg_fetch_files_from_s3',
         default_args=args,
         description='DWH fetch files from s3 to local path',
         catchup=True,
@@ -100,11 +101,5 @@ with DAG(
     op_kwargs={'file_name': 'group_log.csv'}
     )
 
-    print_10_lines_of_each = BashOperator(
-    task_id='print_10_lines_of_each',
-    bash_command=bash_command_tmpl,
-    params={'files': [f'/data/{f}' for f in bucket_files]}
-    )
-    
 
-start_task >> [fetch_groups, fetch_users, fetch_dialogs, fetch_group_log] >> print_10_lines_of_each
+start_task >> [fetch_groups, fetch_users, fetch_dialogs, fetch_group_log] 
